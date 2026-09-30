@@ -1,77 +1,53 @@
 # ASN Wave Monitor
 
-Prototype fonctionnel basé sur le cahier des charges ASN « Projet affichage Hs Tp ».
+Application de suivi des vagues à partir du heave mesuré. Elle estime la hauteur significative `Hs` et la période de pic `Tp`, affiche les mesures de vent et de courant, signale l'état des capteurs et enregistre les données dans une base SQLite.
 
-## Ce qui est déjà implémenté
+## Fonctionnalités
 
-- acquisition locale en mode simulation ;
-- architecture d'acquisition UDP séparée des traitements ;
-- stockage CSV des données brutes et des résultats ;
-- fenêtre glissante de 20 minutes pour le heave ;
-- analyse spectrale Welch/FFT ;
-- calcul `Hs = 4 * sqrt(m0)` ;
-- calcul de `Tp` par fréquence du pic spectral ;
-- affichage temps réel Hs, Tp, courant et vent ;
-- seuils configurables pour Hs, vent et courant ;
-- préparation d'un mode UDP pour les trois capteurs ;
-- décodage `$PHLIN,x.xxx,y.yyy,z.zzz*hh` de l'heave Octans sur flux série ;
-- code structuré pour ajouter les décodeurs réels Octans/Exail, Valeport et anémomètre.
+- Acquisition par UDP ou port série, ou génération de données en mode simulation.
+- Décodage du heave Octans au format `$PHLIN,x.xxx,y.yyy,z.zzz*hh`, avec vérification du checksum XOR et gestion des trames série fragmentées.
+- Calcul spectral sur une fenêtre glissante de 20 minutes, avec detrend et méthode de Welch.
+- Correction du spectre par la RAO du navire et de la direction sélectionnés.
+- Affichage de `Hs`, `Tp`, du vent, du courant, des alertes, de l'état de réception et de l'historique.
+- Enregistrement horodaté des mesures et des erreurs dans des fichiers SQLite sous `data/`.
 
-## Installation
+## Installation et lancement
 
-Python 3.8+ est recommandé.
+Python 3.8 ou ultérieur est recommandé. Tkinter doit être disponible avec l'installation Python.
 
-```bash
+```powershell
 python -m venv .venv
-# Windows:
-.venv\Scripts\activate
-# Linux:
-source .venv/bin/activate
-
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 python app.py
 ```
 
-Au premier lancement, l'application est en **simulation**. Les fichiers sont écrits dans `data/`.
+Le fichier `config.json` fourni démarre en mode UDP. Pour essayer l'interface sans capteurs, régler `inputs.mode` à `simulation`. Le profil de mer utilisé en simulation est défini par `inputs.preset` (`calm`, `moderate`, `rough` ou `instrument`).
 
-## Passage à l'acquisition réelle
+## Acquisition
 
-Modifier `config.json` :
+Les transports, hôtes et ports sont définis dans `config.json`. La configuration fournie utilise UDP : Octans sur le port 9998, courant sur 5001 et vent sur 5002. Les hôtes et ports doivent correspondre à l'installation du bord. Le mode série est également disponible pour le flux PHLIN Octans.
 
-```json
-"inputs": {
-  "mode": "udp",
-  "octans": {"transport": "udp", "host": "0.0.0.0", "port": 5000},
-  "current": {"transport": "udp", "host": "0.0.0.0", "port": 5001},
-  "wind": {"transport": "udp", "host": "0.0.0.0", "port": 5002}
-}
+Le calcul utilise une fréquence d'échantillonnage configurée actuellement à 5 Hz et limite l'analyse à la bande 0,03-0,5 Hz. Vérifier ces paramètres avec les données et les capteurs réellement utilisés.
+
+## Profils navire et RAO
+
+Le menu **Navire** choisit le profil RAO. Le menu **Direction de houle** choisit l'incidence relative au navire. Le profil configuré actuellement est **IOT - Ile d'Ouessant**, avec une direction initiale de 0°.
+
+Le classeur Excel IOT comporte des onglets nommés par angle. Le lecteur prend la période en secondes de la colonne B et l'amplitude HEAVE de la colonne E, puis convertit la période en fréquence (`f = 1 / T`). Il interpole les gains en fréquence et sélectionne l'onglet d'angle choisi. Hors de la plage de fréquences couverte, le gain est neutre (1), donc aucune correction RAO n'est appliquée.
+
+La correction est appliquée au spectre avant le calcul des deux indicateurs :
+
+```text
+PSD_corrigee(f) = PSD_heave(f) / RAO(f)^2
+Hs = 4 * sqrt(integrale(PSD_corrigee))
+Tp = 1 / frequence_du_pic(PSD_corrigee)
 ```
 
-Les ports sont des exemples et doivent être remplacés par ceux du bord.
+Le classeur IOT est fourni dans `rao/RAO_IOT_Arrival_Concrete_V0.xlsx` et référencé par un chemin relatif dans `config.json`. Copier le dossier complet de l'application conserve ainsi la RAO avec elle. Pour ajouter un navire, placer son classeur dans `rao/` et ajouter une entrée dans `vessels` avec son chemin relatif et `default_heading_deg`.
 
-### Octans PHLIN
+## Données et validation
 
-Le flux série Octans est décodé au format `$PHLIN,x.xxx,y.yyy,z.zzz*hh<CR><LF>`. Le troisième champ numérique `z.zzz` est utilisé comme heave en mètres. Le parseur vérifie le checksum XOR `hh` et gère les lectures fragmentées ou contenant plusieurs trames.
+Chaque lancement crée un fichier SQLite horodaté dans `data/`, contenant les mesures et les erreurs relevées. Ces journaux facilitent l'analyse, mais ne constituent pas à eux seuls une validation métrologique.
 
-## RAO
-
-Le moteur de calcul accepte déjà un paramètre `rao` sous forme de fonction fréquence -> gain. La lecture d'un fichier RAO réel doit être ajoutée dès que son format est défini.
-
-## Validation
-
-Le prototype ne doit pas être utilisé comme instrument opérationnel avant validation avec des données Octans réelles et comparaison avec une référence. Le cahier des charges précise que la précision de Hs reste à définir et à valider avec les données réelles.
-
-## Architecture cible
-
-`Acquisition -> Décodage -> Buffer heave 20 min -> Spectre -> RAO optionnelle -> Hs/Tp -> Alertes -> Affichage + Enregistrement`
-
-## Évolutions recommandées
-
-1. Implémenter les trames officielles Exail BACUSTOM2/stdbin.
-2. Ajouter pyserial pour les ports série réels.
-3. Ajouter un import de fichiers de test et un lecteur « replay ».
-4. Ajouter une vue spectrale et les statistiques qualité des données.
-5. Ajouter une configuration GUI des seuils et interfaces.
-6. Ajouter SQLite en option et une signature/intégrité des fichiers pour la traçabilité.
-7. Ajouter tests automatiques avec jeux de données de référence.
-8. Générer un exécutable Windows après validation (`PyInstaller`).
+Avant tout usage opérationnel, valider les conventions de direction, les paramètres d'acquisition, les courbes RAO, le calcul de `Hs` et de `Tp` avec des données réelles et une référence indépendante. Le classeur IOT fourni correspond à la condition « arrival from test to concrete », à vitesse nulle et en profondeur d'eau infinie ; vérifier que ces hypothèses correspondent à la situation d'utilisation.

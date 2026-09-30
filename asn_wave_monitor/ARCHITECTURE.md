@@ -1,30 +1,34 @@
 # Architecture technique
 
-## Modules
+## Flux de traitement
 
-- `UDPReceiver` : transport réseau non bloquant, en thread.
-- `NMEAParser` : couche d'adaptation des trames capteurs.
-- `Simulator` : générateur de données pour démonstration et tests.
-- `compute_wave()` : traitement spectral.
-- `CSVLogger` : traçabilité des données.
-- `App` : interface opérateur.
+`UDP / série / simulation -> décodage -> buffer heave -> spectre Welch -> correction RAO -> Hs et Tp -> interface + SQLite`
 
-## Traitement Hs/Tp
+## Composants
 
-1. Les échantillons heave sont conservés dans une fenêtre de 20 minutes.
-2. Le signal est détrendé.
-3. Le spectre de puissance est estimé par méthode de Welch.
-4. Si une RAO est disponible, le spectre peut être corrigé.
-5. `m0` est l'intégrale du spectre.
-6. `Hs = 4 * sqrt(m0)`.
-7. `Tp = 1 / fp`, avec `fp` fréquence du maximum spectral.
+- `UDPReceiver` et `SerialReceiver` acquièrent les données dans des threads dédiés.
+- `NMEAParser` et `ExailParser` décodent les messages des capteurs ; `PhlinStreamParser` reconstitue les trames PHLIN reçues par série.
+- `Simulator` fournit des signaux de test en mode simulation.
+- `WaveProcessor` calcule périodiquement les indicateurs sans bloquer Tkinter.
+- `RAOManager` charge les courbes RAO Excel (par angle) ou CSV et fournit le gain interpolé à la fréquence demandée.
+- `SQLiteLogger` conserve les mesures et erreurs dans une base horodatée.
+- `App` gère les sélecteurs de navire et de direction, le tableau de bord et les alertes.
 
-## Points à valider
+## Calcul de Hs et Tp
 
-- fréquence d'échantillonnage réelle Octans ;
-- format BACUSTOM2/stdbin ;
-- définition et format de la RAO ;
-- conventions de direction ;
-- fréquence des mesures courant/vent ;
-- seuils opérationnels ;
-- précision attendue de Hs.
+1. Les échantillons heave sont conservés dans une fenêtre glissante de 20 minutes.
+2. Le signal est détrendé et son spectre de puissance est estimé par Welch.
+3. Le spectre est limité à la bande configurée (0,03-0,5 Hz par défaut).
+4. Lorsque le profil RAO est chargé, chaque fréquence est corrigée par `PSD_corrigee = PSD_heave / RAO^2`. En dehors de la plage RAO, le gain vaut 1.
+5. `m0` est l'intégrale du spectre corrigé et `Hs = 4 * sqrt(m0)`.
+6. `Tp` est l'inverse de la fréquence au maximum du spectre corrigé.
+
+## Hypothèses à valider
+
+- compatibilité entre le navire, sa condition de chargement et le classeur RAO sélectionné ;
+- direction de houle relative au navire choisie par l'opérateur ;
+- fréquence d'échantillonnage, bande analysée et fenêtre de calcul ;
+- formats et conventions réels des capteurs UDP/série ;
+- seuils d'alerte et précision attendue de Hs et Tp.
+
+Le profil IOT fourni correspond à une condition d'arrivée depuis le test vers le béton, à vitesse nulle et en profondeur d'eau infinie. Une validation sur données réelles et comparaison à une référence restent nécessaires avant tout usage opérationnel.
