@@ -1,4 +1,5 @@
 import json
+import csv
 import math
 import queue
 import random
@@ -15,6 +16,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 import numpy as np
+from openpyxl import load_workbook
 from scipy import signal
 import serial
 
@@ -101,20 +103,86 @@ def determine_reception_quality(valid, missing_sensors=0, error_count=0):
 
 class RAOManager:
     """Gestionnaire de RAO (Response Amplitude Operator)."""
-    def __init__(self, filepath=None):
-        self.frequencies = []
-        self.gains = []
-        if filepath and Path(filepath).exists():
-            self._load_rao(filepath)
-            
+    def __init__(self, filepath=None, heading_deg=0):
+        self.curves = {}
+        self.heading_deg = float(heading_deg)
+        self.load_error = None
+        if filepath:
+            try:
+                self._load_rao(filepath)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                self.load_error = str(exc)
+
+    @property
+    def available_headings(self):
+        return tuple(sorted(self.curves))
+
     def _load_rao(self, filepath):
-        # Stub pour le chargement d'un fichier CSV/JSON de RAO réel
-        pass
+        path = Path(filepath)
+        if not path.is_file():
+            raise FileNotFoundError(f"Fichier RAO introuvable: {path}")
+
+        if path.suffix.lower() == ".xlsx":
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            try:
+                for sheet in workbook.worksheets:
+                    try:
+                        heading = float(sheet.title)
+                    except ValueError:
+                        continue
+
+                    points = []
+                    for row in sheet.iter_rows(min_row=5, min_col=2, max_col=5, values_only=True):
+                        period, gain = row[0], row[3]
+                        if period is None or gain is None:
+                            continue
+                        period, gain = float(period), float(gain)
+                        if math.isfinite(period) and period > 0 and math.isfinite(gain) and gain >= 0:
+                            points.append((1.0 / period, gain))
+                    if points:
+                        points.sort(key=lambda point: point[0])
+                        self.curves[heading] = (
+                            np.asarray([point[0] for point in points]),
+                            np.asarray([point[1] for point in points]),
+                        )
+            finally:
+                workbook.close()
+        elif path.suffix.lower() == ".csv":
+            points = []
+            with path.open("r", encoding="utf-8-sig", newline="") as source:
+                for row in csv.reader(source):
+                    if len(row) < 2:
+                        continue
+                    try:
+                        frequency = float(row[0].strip().replace(",", "."))
+                        gain = float(row[1].strip().replace(",", "."))
+                    except ValueError:
+                        continue
+                    if math.isfinite(frequency) and frequency > 0 and math.isfinite(gain) and gain >= 0:
+                        points.append((frequency, gain))
+            if points:
+                points.sort(key=lambda point: point[0])
+                self.curves[0.0] = (
+                    np.asarray([point[0] for point in points]),
+                    np.asarray([point[1] for point in points]),
+                )
+        else:
+            raise ValueError(f"Format RAO non pris en charge: {path.suffix}")
+
+        if not self.curves:
+            raise ValueError(f"Aucune courbe RAO exploitable dans {path.name}")
+
+    def set_heading(self, heading_deg):
+        self.heading_deg = float(heading_deg)
 
     def get_gain(self, frequency):
-        if not self.frequencies:
-            return 1.0 # Pas de correction par défaut
-        return np.interp(frequency, self.frequencies, self.gains)
+        if not self.curves:
+            return 1.0
+        heading = min(self.curves, key=lambda value: abs(value - self.heading_deg))
+        frequencies, gains = self.curves[heading]
+        if frequency < frequencies[0] or frequency > frequencies[-1]:
+            return 1.0
+        return float(np.interp(frequency, frequencies, gains))
 
 # ==========================================
 # ACQUISITION (Réseau, Série, Parseurs)
@@ -509,9 +577,16 @@ class App(tk.Tk):
         self.wind = {"speed": float("nan"), "direction": float("nan")}
         self.wave = WaveResult()
 
+        self.vessels = self.config_data.get("vessels") or {
+            "Profil actuel": {"rao_file": self.config_data["wave"].get("rao_file")}
+        }
+        self.selected_vessel = self.config_data.get("selected_vessel")
+        if self.selected_vessel not in self.vessels:
+            self.selected_vessel = next(iter(self.vessels))
+        self.rao = self._load_vessel_rao(self.selected_vessel)
+
         self.logger = SQLiteLogger(BASE / self.config_data["storage"]["directory"])
         self.logger.start()
-        self.rao = RAOManager(self.config_data["wave"].get("rao_file"))
 
         self.build_ui()
         self.start_inputs()
@@ -525,6 +600,28 @@ class App(tk.Tk):
         ttk.Label(top, text="ASN Wave Monitor", font=("Segoe UI", 20, "bold")).pack(side="left")
         self.status_var = tk.StringVar(value="Démarrage…")
         ttk.Label(top, textvariable=self.status_var).pack(side="right")
+
+        selection = ttk.Frame(self, padding=(12, 0, 12, 8))
+        selection.pack(fill="x")
+        ttk.Label(selection, text="Navire").pack(side="left", padx=(0, 6))
+        self.vessel_var = tk.StringVar(value=self.selected_vessel)
+        self.vessel_combo = ttk.Combobox(
+            selection, textvariable=self.vessel_var, state="readonly",
+            values=list(self.vessels), width=30
+        )
+        self.vessel_combo.pack(side="left", padx=(0, 16))
+        self.vessel_combo.bind("<<ComboboxSelected>>", self.on_vessel_select)
+
+        ttk.Label(selection, text="Direction de houle").pack(side="left", padx=(0, 6))
+        self.heading_var = tk.StringVar()
+        self.heading_combo = ttk.Combobox(
+            selection, textvariable=self.heading_var, state="disabled", width=10
+        )
+        self.heading_combo.pack(side="left", padx=(0, 16))
+        self.heading_combo.bind("<<ComboboxSelected>>", self.on_heading_select)
+        self.rao_status_var = tk.StringVar()
+        ttk.Label(selection, textvariable=self.rao_status_var).pack(side="left")
+        self._configure_heading_control()
 
         cards = ttk.Frame(self, padding=10)
         cards.pack(fill="x")
@@ -582,6 +679,59 @@ class App(tk.Tk):
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=self)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+
+    def _load_vessel_rao(self, vessel_name):
+        profile = self.vessels[vessel_name]
+        filepath = profile.get("rao_file")
+        if filepath and not Path(filepath).is_absolute():
+            filepath = BASE / filepath
+        return RAOManager(filepath, profile.get("default_heading_deg", 0))
+
+    def _configure_heading_control(self):
+        headings = self.rao.available_headings
+        values = [f"{heading:g}°" for heading in headings]
+        self.heading_combo.configure(values=values, state="readonly" if values else "disabled")
+
+        if headings:
+            requested = self.vessels[self.selected_vessel].get("default_heading_deg", headings[0])
+            heading = min(headings, key=lambda value: abs(value - float(requested)))
+            self.rao.set_heading(heading)
+            self.heading_var.set(f"{heading:g}°")
+            self._update_rao_status()
+        elif self.rao.load_error:
+            self.heading_var.set("Indisponible")
+            self._update_rao_status()
+        else:
+            self.heading_var.set("Indisponible")
+            self._update_rao_status()
+
+    def _update_rao_status(self):
+        if self.rao.load_error:
+            self.rao_status_var.set(f"RAO indisponible: {self.rao.load_error}")
+        elif self.rao.available_headings:
+            self.rao_status_var.set(
+                f"RAO chargée ({self.rao.heading_deg:g}°, {len(self.rao.available_headings)} directions)"
+            )
+        else:
+            self.rao_status_var.set("Aucune correction RAO")
+
+    def on_vessel_select(self, event=None):
+        vessel_name = self.vessel_var.get()
+        if vessel_name not in self.vessels:
+            return
+        self.selected_vessel = vessel_name
+        self.rao = self._load_vessel_rao(vessel_name)
+        if hasattr(self, "processor"):
+            self.processor.rao_manager = self.rao
+        self._configure_heading_control()
+
+    def on_heading_select(self, event=None):
+        value = self.heading_var.get().replace("°", "")
+        try:
+            self.rao.set_heading(float(value))
+        except ValueError:
+            return
+        self._update_rao_status()
 
     def start_inputs(self):
         self.workers = []

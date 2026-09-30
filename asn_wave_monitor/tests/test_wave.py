@@ -2,9 +2,11 @@ import sqlite3
 import struct
 
 import numpy as np
+from openpyxl import Workbook
 from app import (
     ExailParser,
     PhlinStreamParser,
+    RAOManager,
     SEA_STATE_PRESETS,
     SQLiteLogger,
     StdBinStreamParser,
@@ -64,6 +66,27 @@ def test_wave_returns_valid_result():
     assert r.valid
     assert r.hs_m > 0
     assert abs(r.tp_s - 10) < 1.0
+
+
+def test_rao_manager_loads_heading_specific_excel_curves(tmp_path):
+    workbook = Workbook()
+    for heading, gains in (("0", (0.8, 0.4)), ("90", (0.6, 0.2))):
+        sheet = workbook.active if heading == "0" else workbook.create_sheet(heading)
+        sheet.title = heading
+        sheet.cell(row=5, column=2, value=2.0)
+        sheet.cell(row=5, column=5, value=gains[1])
+        sheet.cell(row=6, column=2, value=4.0)
+        sheet.cell(row=6, column=5, value=gains[0])
+    filepath = tmp_path / "rao_iot.xlsx"
+    workbook.save(filepath)
+
+    rao = RAOManager(filepath)
+
+    assert rao.available_headings == (0.0, 90.0)
+    assert rao.get_gain(0.25) == 0.8
+    assert rao.get_gain(0.1) == 1.0
+    rao.set_heading(90)
+    assert rao.get_gain(0.25) == 0.6
 
 
 def test_simulate_sea_state_has_realistic_variability():

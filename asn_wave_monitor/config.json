@@ -9,6 +9,13 @@
     "max_frequency_hz": 0.5,
     "rao_file": "rao_data.csv"
   },
+  "selected_vessel": "IOT - Ile d'Ouessant",
+  "vessels": {
+    "IOT - Ile d'Ouessant": {
+      "rao_file": "C:\\Users\\vjaudon\\OneDrive - Alcatel Submarine Networks\\Bureau\\RAO\\IOT\\RAO\\RAO_IOT_Arrival_Concrete\\RAO_IOT_Arrival_Concrete_V0.xlsx",
+      "default_heading_deg": 0
+    }
+  },
   "alerts": {
     "hs_max_m": 3.0,
     "wind_max_kn": 25.0,

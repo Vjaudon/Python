@@ -55,7 +55,9 @@ Le flux série Octans est décodé au format `$PHLIN,x.xxx,y.yyy,z.zzz*hh<CR><LF
 
 ## RAO
 
-Le moteur de calcul accepte déjà un paramètre `rao` sous forme de fonction fréquence -> gain. La lecture d'un fichier RAO réel doit être ajoutée dès que son format est défini.
+Le menu **Navire** sélectionne le profil RAO utilisé pour corriger le spectre. Le menu **Direction de houle** sélectionne l'angle relatif au navire ; les classeurs Excel utilisent les onglets numériques d'angle, la période en colonne B et l'amplitude HEAVE en colonne E. Les fréquences sont calculées comme l'inverse des périodes. Hors de la plage couverte par la courbe, aucune correction RAO n'est appliquée.
+
+Le profil IOT fourni est déclaré dans `config.json`. Son chemin Excel est propre à ce poste ; pour déplacer le projet, copier le classeur dans le projet et remplacer `rao_file` par son chemin relatif. Pour ajouter un bateau, ajouter une entrée dans `vessels` avec `rao_file` et `default_heading_deg`.
 
 ## Validation
 
