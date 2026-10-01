@@ -4,10 +4,10 @@ import math
 import queue
 import random
 import socket
-import sqlite3
 import struct
 import threading
 import time
+import webbrowser
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -35,62 +35,45 @@ class WaveResult:
     timestamp: float = 0.0
 
 # ==========================================
-# GESTION DES DONNÉES (SQLite & RAO)
+# GESTION DES DONNÉES (TXT & RAO)
 # ==========================================
 
-class SQLiteLogger:
-    """Remplace le CSVLogger pour plus de robustesse et d'intégrité."""
+class TextLogger:
+    """Write measurements and errors to a tab-separated text log."""
     def __init__(self, directory):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.db_path = self.directory / f"asn_measurements_{stamp}.sqlite"
-        self.conn = None
+        self.log_path = self.directory / f"asn_measurements_{stamp}.txt"
+        self.file = None
+        self.writer = None
 
     def start(self):
-        self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS measurements (
-                timestamp_utc TEXT,
-                heave_m REAL,
-                current_speed_kn REAL,
-                current_direction_deg REAL,
-                current_depth_m REAL,
-                wind_speed_kn REAL,
-                wind_direction_deg REAL,
-                hs_m REAL,
-                tp_s REAL
-            )
-        """)
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS errors (
-                timestamp_utc TEXT,
-                level TEXT,
-                component TEXT,
-                message TEXT
-            )
-        """)
-        self.conn.commit()
+        self.file = self.log_path.open("w", encoding="utf-8", newline="")
+        self.writer = csv.writer(self.file, delimiter="\t", lineterminator="\n")
+        self.writer.writerow((
+            "timestamp_utc", "type", "heave_m", "current_speed_kn",
+            "current_direction_deg", "current_depth_m", "wind_speed_kn",
+            "wind_direction_deg", "hs_m", "tp_s", "level", "component", "message",
+        ))
+        self.file.flush()
 
     def write(self, data):
-        if self.conn:
-            self.conn.execute("""
-                INSERT INTO measurements 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, data)
-            self.conn.commit()
+        if self.writer and self.file:
+            self.writer.writerow((data[0], "measurement", *data[1:], "", "", ""))
+            self.file.flush()
 
     def write_error(self, level, component, message):
-        if self.conn:
-            self.conn.execute(
-                "INSERT INTO errors (timestamp_utc, level, component, message) VALUES (?, ?, ?, ?)",
-                (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), level, component, message)
-            )
-            self.conn.commit()
+        if self.writer and self.file:
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            self.writer.writerow((timestamp, "error", *([""] * 8), level, component, message))
+            self.file.flush()
 
     def close(self):
-        if self.conn:
-            self.conn.close()
+        if self.file:
+            self.file.close()
+            self.file = None
+            self.writer = None
 
 
 def determine_reception_quality(valid, missing_sensors=0, error_count=0):
@@ -594,7 +577,8 @@ class App(tk.Tk):
             self.selected_vessel = next(iter(self.vessels))
         self.rao = self._load_vessel_rao(self.selected_vessel)
 
-        self.logger = SQLiteLogger(BASE / self.config_data["storage"]["directory"])
+        self.data_directory = BASE / self.config_data["storage"]["directory"]
+        self.logger = TextLogger(self.data_directory)
         self.logger.start()
 
         self.build_ui()
@@ -610,7 +594,15 @@ class App(tk.Tk):
         self.status_var = tk.StringVar(value="Démarrage…")
         ttk.Label(top, textvariable=self.status_var).pack(side="right")
 
-        selection = ttk.Frame(self, padding=(12, 0, 12, 8))
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True)
+        dashboard = ttk.Frame(self.notebook)
+        data_tab = ttk.Frame(self.notebook)
+        self.notebook.add(dashboard, text="Tableau de bord")
+        self.notebook.add(data_tab, text="Données")
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
+        selection = ttk.Frame(dashboard, padding=(12, 0, 12, 8))
         selection.pack(fill="x")
         ttk.Label(selection, text="Navire").pack(side="left", padx=(0, 6))
         self.vessel_var = tk.StringVar(value=self.selected_vessel)
@@ -632,7 +624,7 @@ class App(tk.Tk):
         ttk.Label(selection, textvariable=self.rao_status_var).pack(side="left")
         self._configure_heading_control()
 
-        cards = ttk.Frame(self, padding=10)
+        cards = ttk.Frame(dashboard, padding=10)
         cards.pack(fill="x")
         self.vars = {
             "Hs": (tk.StringVar(value="—"), "m"),
@@ -652,16 +644,16 @@ class App(tk.Tk):
         self.sensor_status_vars = {}
         self.sensor_status_labels = {}
 
-        alert = ttk.LabelFrame(self, text="État des seuils", padding=8)
+        alert = ttk.LabelFrame(dashboard, text="État des seuils", padding=8)
         alert.pack(fill="x", padx=15)
         ttk.Label(alert, textvariable=self.alert_var, font=("Segoe UI", 14, "bold")).pack(side="left")
 
-        quality = ttk.LabelFrame(self, text="Qualité de réception", padding=8)
+        quality = ttk.LabelFrame(dashboard, text="Qualité de réception", padding=8)
         quality.pack(fill="x", padx=15, pady=(0, 8))
         self.quality_label = ttk.Label(quality, textvariable=self.quality_var, font=("Segoe UI", 14, "bold"))
         self.quality_label.pack(side="left")
 
-        bottom = ttk.Frame(self)
+        bottom = ttk.Frame(dashboard)
         bottom.pack(fill="both", expand=True, padx=15, pady=(0, 10))
 
         sensor_panel = ttk.LabelFrame(bottom, text="État des capteurs", padding=8)
@@ -686,8 +678,140 @@ class App(tk.Tk):
 
         self.fig = Figure(figsize=(11, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=dashboard)
         self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+
+        self._build_data_tab(data_tab)
+        self.refresh_data_files()
+
+    def _build_data_tab(self, parent):
+        toolbar = ttk.Frame(parent, padding=10)
+        toolbar.pack(fill="x")
+        ttk.Button(toolbar, text="Actualiser", command=self.refresh_data_files).pack(side="left")
+        ttk.Button(toolbar, text="Ouvrir le fichier", command=self.open_selected_data_file).pack(
+            side="left", padx=(8, 12)
+        )
+        self.data_status_var = tk.StringVar(value="Sélectionnez un fichier de données.")
+        ttk.Label(toolbar, textvariable=self.data_status_var).pack(side="left")
+
+        panes = ttk.Panedwindow(parent, orient=tk.HORIZONTAL)
+        panes.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        files_panel = ttk.LabelFrame(panes, text="Fichiers enregistrés", padding=8)
+        panes.add(files_panel, weight=1)
+        self.data_file_tree = ttk.Treeview(
+            files_panel, columns=("modified", "size"), show="tree headings", selectmode="browse"
+        )
+        self.data_file_tree.heading("#0", text="Fichier")
+        self.data_file_tree.heading("modified", text="Modifié")
+        self.data_file_tree.heading("size", text="Taille")
+        self.data_file_tree.column("#0", width=220, minwidth=150)
+        self.data_file_tree.column("modified", width=135, minwidth=120, stretch=False)
+        self.data_file_tree.column("size", width=75, minwidth=65, stretch=False, anchor="e")
+        self.data_file_tree.pack(fill="both", expand=True)
+        self.data_file_tree.bind("<<TreeviewSelect>>", self.on_data_file_select)
+
+        preview_panel = ttk.LabelFrame(panes, text="Enregistrements récents", padding=8)
+        panes.add(preview_panel, weight=4)
+        columns = (
+            "type", "timestamp_utc", "heave_m", "current_speed_kn",
+            "current_direction_deg", "current_depth_m", "wind_speed_kn",
+            "wind_direction_deg", "hs_m", "tp_s", "level", "component", "message",
+        )
+        labels = {
+            "type": "Type", "timestamp_utc": "Horodatage UTC", "heave_m": "Heave (m)",
+            "current_speed_kn": "Courant (kn)", "current_direction_deg": "Dir. courant (°)",
+            "current_depth_m": "Profondeur (m)", "wind_speed_kn": "Vent (kn)",
+            "wind_direction_deg": "Dir. vent (°)", "hs_m": "Hs (m)", "tp_s": "Tp (s)",
+            "level": "Niveau", "component": "Composant", "message": "Message",
+        }
+        self.data_tree = ttk.Treeview(preview_panel, columns=columns, show="headings")
+        for column in columns:
+            self.data_tree.heading(column, text=labels[column])
+            self.data_tree.column(column, width=105, minwidth=80, stretch=False)
+        self.data_tree.column("timestamp_utc", width=170, minwidth=160)
+        self.data_tree.column("type", width=85, minwidth=75)
+        self.data_tree.column("message", width=240, minwidth=180)
+        vertical_scroll = ttk.Scrollbar(preview_panel, orient="vertical", command=self.data_tree.yview)
+        horizontal_scroll = ttk.Scrollbar(preview_panel, orient="horizontal", command=self.data_tree.xview)
+        self.data_tree.configure(yscrollcommand=vertical_scroll.set, xscrollcommand=horizontal_scroll.set)
+        preview_panel.rowconfigure(0, weight=1)
+        preview_panel.columnconfigure(0, weight=1)
+        self.data_tree.grid(row=0, column=0, sticky="nsew")
+        vertical_scroll.grid(row=0, column=1, sticky="ns")
+        horizontal_scroll.grid(row=1, column=0, sticky="ew")
+
+    def on_tab_changed(self, event=None):
+        if self.notebook.select() == str(self.notebook.tabs()[-1]):
+            self.refresh_data_files()
+
+    def refresh_data_files(self):
+        selected = self.data_file_tree.selection()
+        selected_path = selected[0] if selected else None
+        for item in self.data_file_tree.get_children():
+            self.data_file_tree.delete(item)
+
+        paths = sorted(
+            self.data_directory.glob("asn_measurements_*.txt"),
+            key=lambda path: path.stat().st_mtime,
+            reverse=True,
+        )
+        for path in paths:
+            modified = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+            size = f"{path.stat().st_size / 1024:.1f} KB"
+            self.data_file_tree.insert(
+                "", tk.END, iid=str(path.resolve()), text=path.name, values=(modified, size)
+            )
+
+        if not paths:
+            self._clear_data_preview()
+            self.data_status_var.set("Aucun fichier texte trouvé dans le dossier data.")
+            return
+
+        item = selected_path if selected_path in self.data_file_tree.get_children() else str(paths[0].resolve())
+        self.data_file_tree.selection_set(item)
+        self.data_file_tree.focus(item)
+        self.show_data_file(Path(item))
+
+    def on_data_file_select(self, event=None):
+        selection = self.data_file_tree.selection()
+        if selection:
+            self.show_data_file(Path(selection[0]))
+
+    def show_data_file(self, filepath):
+        self._clear_data_preview()
+        recent_rows = deque(maxlen=500)
+        row_count = 0
+        try:
+            with filepath.open("r", encoding="utf-8", newline="") as source:
+                reader = csv.DictReader(source, delimiter="\t")
+                for row in reader:
+                    recent_rows.append(row)
+                    row_count += 1
+        except (OSError, csv.Error) as exc:
+            self.data_status_var.set(f"Impossible de lire {filepath.name}: {exc}")
+            return
+
+        columns = self.data_tree["columns"]
+        for row in recent_rows:
+            self.data_tree.insert("", tk.END, values=tuple(row.get(column, "") for column in columns))
+        shown = len(recent_rows)
+        self.data_status_var.set(
+            f"{filepath.name} — {shown} dernières lignes affichées sur {row_count}. "
+            "Ouvrez le fichier pour accéder à l'historique complet."
+        )
+
+    def _clear_data_preview(self):
+        for item in self.data_tree.get_children():
+            self.data_tree.delete(item)
+
+    def open_selected_data_file(self):
+        selection = self.data_file_tree.selection()
+        if not selection:
+            return
+        filepath = Path(selection[0]).resolve()
+        if not webbrowser.open(filepath.as_uri()):
+            messagebox.showerror("Données", f"Impossible d'ouvrir {filepath}")
 
     def _load_vessel_rao(self, vessel_name):
         profile = self.vessels[vessel_name]

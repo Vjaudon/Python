@@ -1,4 +1,4 @@
-import sqlite3
+import csv
 import struct
 
 import numpy as np
@@ -8,7 +8,7 @@ from app import (
     PhlinStreamParser,
     RAOManager,
     SEA_STATE_PRESETS,
-    SQLiteLogger,
+    TextLogger,
     StdBinStreamParser,
     compute_wave,
     determine_reception_quality,
@@ -123,16 +123,21 @@ def test_sea_state_presets_are_defined():
         assert cfg["noise_std"] >= 0
 
 
-def test_error_log_contains_entries(tmp_path):
-    logger = SQLiteLogger(tmp_path)
+def test_text_log_contains_measurements_and_errors(tmp_path):
+    logger = TextLogger(tmp_path)
     logger.start()
+    logger.write(("2026-10-01T12:00:00Z", 0.4, 1.2, 90.0, 20.0, 10.0, 180.0, 1.5, 8.0))
     logger.write_error("ERROR", "sensor", "Test message")
     logger.close()
 
-    conn = sqlite3.connect(logger.db_path)
-    count = conn.execute("SELECT COUNT(*) FROM errors").fetchone()[0]
-    conn.close()
-    assert count == 1
+    with logger.log_path.open(encoding="utf-8", newline="") as source:
+        rows = list(csv.DictReader(source, delimiter="\t"))
+
+    assert len(rows) == 2
+    assert rows[0]["type"] == "measurement"
+    assert rows[0]["heave_m"] == "0.4"
+    assert rows[1]["type"] == "error"
+    assert rows[1]["message"] == "Test message"
 
 
 def test_reception_quality_levels_are_defined():

@@ -1,6 +1,6 @@
 # ASN Wave Monitor
 
-Application de suivi des vagues à partir du heave mesuré. Elle estime la hauteur significative `Hs` et la période de pic `Tp`, affiche les mesures de vent et de courant, signale l'état des capteurs et enregistre les données dans une base SQLite.
+Application de suivi des vagues à partir du heave mesuré. Elle estime la hauteur significative `Hs` et la période de pic `Tp`, affiche les mesures de vent et de courant, signale l'état des capteurs et enregistre les données dans un fichier texte tabulé.
 
 ## Fonctionnalités
 
@@ -9,7 +9,8 @@ Application de suivi des vagues à partir du heave mesuré. Elle estime la haute
 - Calcul spectral sur une fenêtre glissante de 20 minutes, avec detrend et méthode de Welch.
 - Correction du spectre par la RAO du navire et de la direction sélectionnés.
 - Affichage de `Hs`, `Tp`, du vent, du courant, des alertes, de l'état de réception et de l'historique.
-- Enregistrement horodaté des mesures et des erreurs dans des fichiers SQLite sous `data/`.
+- Enregistrement horodaté des mesures et des erreurs dans des fichiers texte tabulés sous `data/`.
+- Consultation des fichiers enregistrés dans l'onglet **Données**, avec aperçu et ouverture de l'historique complet.
 
 ## Installation et lancement
 
@@ -32,7 +33,7 @@ Le calcul utilise une fréquence d'échantillonnage configurée actuellement à 
 
 ## Profils navire et RAO
 
-Le menu **Navire** choisit le profil RAO. Le menu **Direction de houle** choisit l'incidence relative au navire. Les profils disponibles sont **IOT - Ile d'Ouessant** et **ASN - Ile de Molène**; l'IOT reste sélectionné au démarrage. Leur direction initiale est de 0°.
+Le menu **Navire** choisit le profil RAO. Le menu **Direction de houle** choisit l'incidence relative au navire. Les profils disponibles sont **IOT - Ile d'Ouessant** et **IME - Ile de Molène**; l'IOT reste sélectionné au démarrage. Leur direction initiale est de 0°.
 
 Le classeur Excel IOT comporte des onglets nommés par angle. Le lecteur prend la période en secondes de la colonne B et l'amplitude HEAVE de la colonne E. Le classeur Molène utilise des onglets suffixés par `°`, avec la période en colonne A et l'amplitude HEAVE en colonne F. Dans les deux cas, la période est convertie en fréquence (`f = 1 / T`), puis les gains sont interpolés selon l'angle sélectionné. Hors de la plage de fréquences couverte, le gain est neutre (1), donc aucune correction RAO n'est appliquée.
 
@@ -48,6 +49,6 @@ Les classeurs IOT et Molène sont fournis dans `rao/` et référencés par des c
 
 ## Données et validation
 
-Chaque lancement crée un fichier SQLite horodaté dans `data/`, contenant les mesures et les erreurs relevées. Ces journaux facilitent l'analyse, mais ne constituent pas à eux seuls une validation métrologique.
+Chaque lancement crée un fichier `.txt` horodaté dans `data/`. Les lignes tabulées sont identifiées comme `measurement` ou `error`; les en-têtes décrivent les colonnes et les erreurs partagent le journal des mesures. Ces journaux facilitent l'analyse, mais ne constituent pas à eux seuls une validation métrologique.
 
 Avant tout usage opérationnel, valider les conventions de direction, les paramètres d'acquisition, les courbes RAO, le calcul de `Hs` et de `Tp` avec des données réelles et une référence indépendante. Le classeur IOT fourni correspond à la condition « arrival from test to concrete », à vitesse nulle et en profondeur d'eau infinie ; vérifier que ces hypothèses correspondent à la situation d'utilisation.

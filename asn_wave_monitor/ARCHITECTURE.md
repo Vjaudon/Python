@@ -2,7 +2,7 @@
 
 ## Flux de traitement
 
-`UDP / série / simulation -> décodage -> buffer heave -> spectre Welch -> correction RAO -> Hs et Tp -> interface + SQLite`
+`UDP / série / simulation -> décodage -> buffer heave -> spectre Welch -> correction RAO -> Hs et Tp -> interface + fichier texte tabulé`
 
 ## Composants
 
@@ -11,8 +11,8 @@
 - `Simulator` fournit des signaux de test en mode simulation.
 - `WaveProcessor` calcule périodiquement les indicateurs sans bloquer Tkinter.
 - `RAOManager` charge les courbes RAO Excel (par angle) ou CSV et fournit le gain interpolé à la fréquence demandée.
-- `SQLiteLogger` conserve les mesures et erreurs dans une base horodatée.
-- `App` gère les sélecteurs de navire et de direction, le tableau de bord et les alertes.
+- `TextLogger` conserve les mesures et erreurs dans un fichier texte tabulé horodaté.
+- `App` gère les sélecteurs de navire et de direction, le tableau de bord, les alertes et l'accès aux journaux enregistrés.
 
 ## Calcul de Hs et Tp
 
