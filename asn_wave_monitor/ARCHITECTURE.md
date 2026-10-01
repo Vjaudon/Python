@@ -12,7 +12,7 @@
 - `WaveProcessor` calcule périodiquement les indicateurs sans bloquer Tkinter.
 - `RAOManager` charge les courbes RAO Excel (par angle) ou CSV et fournit le gain interpolé à la fréquence demandée.
 - `TextLogger` conserve les mesures et erreurs dans un fichier texte tabulé horodaté.
-- `App` gère les sélecteurs de navire et de direction, le tableau de bord, les alertes et l'accès aux journaux enregistrés.
+- `App` gère les sélecteurs de navire et de direction, le tableau de bord, les alertes, l'accès aux journaux et la configuration des transports et ports par équipement.
 
 ## Calcul de Hs et Tp
 

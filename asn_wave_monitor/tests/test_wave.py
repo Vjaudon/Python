@@ -2,6 +2,7 @@ import csv
 import struct
 
 import numpy as np
+import pytest
 from openpyxl import Workbook
 from app import (
     ExailParser,
@@ -10,6 +11,7 @@ from app import (
     SEA_STATE_PRESETS,
     TextLogger,
     StdBinStreamParser,
+    build_input_configuration,
     compute_wave,
     determine_reception_quality,
     simulate_sea_state,
@@ -138,6 +140,41 @@ def test_text_log_contains_measurements_and_errors(tmp_path):
     assert rows[0]["heave_m"] == "0.4"
     assert rows[1]["type"] == "error"
     assert rows[1]["message"] == "Test message"
+
+
+def test_build_input_configuration_preserves_udp_and_serial_ports():
+    current = {
+        "mode": "udp",
+        "octans": {"transport": "udp", "port": 9998, "local_host": "0.0.0.0"},
+    }
+    updated = build_input_configuration(
+        current,
+        "Capteurs",
+        {
+            "octans": {
+                "transport": "serial",
+                "udp_port": "9998",
+                "serial_port": "COM4",
+                "baudrate": "115200",
+            }
+        },
+    )
+
+    assert current["octans"]["transport"] == "udp"
+    assert updated["mode"] == "udp"
+    assert updated["octans"]["port"] == "COM4"
+    assert updated["octans"]["udp_port"] == 9998
+    assert updated["octans"]["serial_port"] == "COM4"
+    assert updated["octans"]["baudrate"] == 115200
+
+
+def test_build_input_configuration_rejects_invalid_ports():
+    with pytest.raises(ValueError, match="1 et 65535"):
+        build_input_configuration(
+            {"mode": "udp", "wind": {"transport": "udp", "port": 5002}},
+            "Capteurs",
+            {"wind": {"transport": "udp", "udp_port": "70000", "serial_port": "", "baudrate": "115200"}},
+        )
 
 
 def test_reception_quality_levels_are_defined():

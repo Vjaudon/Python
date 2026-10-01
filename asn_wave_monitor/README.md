@@ -5,6 +5,7 @@ Application de suivi des vagues à partir du heave mesuré. Elle estime la haute
 ## Fonctionnalités
 
 - Acquisition par UDP ou port série, ou génération de données en mode simulation.
+- Configuration des ports UDP et série par équipement dans l'onglet **Ports**, avec application immédiate des réglages.
 - Décodage du heave Octans au format `$PHLIN,x.xxx,y.yyy,z.zzz*hh`, avec vérification du checksum XOR et gestion des trames série fragmentées.
 - Calcul spectral sur une fenêtre glissante de 20 minutes, avec detrend et méthode de Welch.
 - Correction du spectre par la RAO du navire et de la direction sélectionnés.
@@ -22,6 +23,16 @@ python -m venv .venv
 pip install -r requirements.txt
 python app.py
 ```
+
+## Installateur Windows
+
+Pour générer `dist/ASN-Wave-Monitor-Setup.exe`, installez les dépendances du projet, PyInstaller (`py -m pip install --user pyinstaller`) et Inno Setup 6, puis exécutez :
+
+```powershell
+.\build_installer.ps1
+```
+
+L'installateur configure l'application dans `%LOCALAPPDATA%\Programs\ASN Wave Monitor`, inclut les classeurs RAO et crée un raccourci dans le menu Démarrer. La configuration et les journaux sont conservés lors d'une désinstallation ou d'une mise à jour.
 
 Le fichier `config.json` fourni démarre en mode UDP. Pour essayer l'interface sans capteurs, régler `inputs.mode` à `simulation`. Le profil de mer utilisé en simulation est défini par `inputs.preset` (`calm`, `moderate`, `rough` ou `instrument`).
 

@@ -1,4 +1,5 @@
 import csv
+import copy
 import json
 import math
 import queue
@@ -74,6 +75,62 @@ class TextLogger:
             self.file.close()
             self.file = None
             self.writer = None
+
+
+def build_input_configuration(current_inputs, acquisition_mode, equipment_settings):
+    """Validate UI port settings and preserve the active port expected by receivers."""
+    updated_inputs = copy.deepcopy(current_inputs)
+    if acquisition_mode not in ("Capteurs", "Simulation"):
+        raise ValueError("Mode d'acquisition invalide.")
+    updated_inputs["mode"] = "simulation" if acquisition_mode == "Simulation" else "udp"
+
+    for equipment, settings in equipment_settings.items():
+        if equipment not in updated_inputs:
+            continue
+        config = updated_inputs[equipment]
+        previous_transport = config.get("transport", "udp")
+        transport = settings["transport"]
+        if transport not in ("udp", "serial"):
+            raise ValueError(f"Transport invalide pour {equipment}.")
+
+        udp_port_text = settings["udp_port"].strip()
+        if udp_port_text:
+            try:
+                udp_port = int(udp_port_text)
+            except ValueError as exc:
+                raise ValueError(f"Le port UDP de {equipment} doit être un nombre.") from exc
+            if not 1 <= udp_port <= 65535:
+                raise ValueError(f"Le port UDP de {equipment} doit être compris entre 1 et 65535.")
+        else:
+            udp_port = config.get("udp_port")
+            if udp_port is None and previous_transport == "udp":
+                udp_port = config.get("port")
+        if transport == "udp" and udp_port is None:
+            raise ValueError(f"Renseignez le port UDP de {equipment}.")
+
+        serial_port = settings["serial_port"].strip()
+        if not serial_port:
+            serial_port = config.get("serial_port", "")
+            if not serial_port and previous_transport == "serial":
+                serial_port = str(config.get("port", ""))
+        if transport == "serial" and not serial_port:
+            raise ValueError(f"Renseignez le port série de {equipment} (par exemple COM3).")
+
+        baudrate_text = settings["baudrate"].strip()
+        try:
+            baudrate = int(baudrate_text or config.get("baudrate", 115200))
+        except ValueError as exc:
+            raise ValueError(f"Le débit série de {equipment} doit être un nombre.") from exc
+        if baudrate <= 0:
+            raise ValueError(f"Le débit série de {equipment} doit être supérieur à zéro.")
+
+        config["transport"] = transport
+        config["udp_port"] = udp_port if udp_port is not None else ""
+        config["serial_port"] = serial_port
+        config["baudrate"] = baudrate
+        config["port"] = udp_port if transport == "udp" else serial_port
+
+    return updated_inputs
 
 
 def determine_reception_quality(valid, missing_sensors=0, error_count=0):
@@ -598,8 +655,10 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True)
         dashboard = ttk.Frame(self.notebook)
         data_tab = ttk.Frame(self.notebook)
+        ports_tab = ttk.Frame(self.notebook)
         self.notebook.add(dashboard, text="Tableau de bord")
         self.notebook.add(data_tab, text="Données")
+        self.notebook.add(ports_tab, text="Ports")
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
         selection = ttk.Frame(dashboard, padding=(12, 0, 12, 8))
@@ -683,6 +742,7 @@ class App(tk.Tk):
 
         self._build_data_tab(data_tab)
         self.refresh_data_files()
+        self._build_input_settings_tab(ports_tab)
 
     def _build_data_tab(self, parent):
         toolbar = ttk.Frame(parent, padding=10)
@@ -813,6 +873,128 @@ class App(tk.Tk):
         if not webbrowser.open(filepath.as_uri()):
             messagebox.showerror("Données", f"Impossible d'ouvrir {filepath}")
 
+    def _build_input_settings_tab(self, parent):
+        mode_panel = ttk.Frame(parent, padding=12)
+        mode_panel.pack(fill="x")
+        ttk.Label(mode_panel, text="Acquisition").pack(side="left", padx=(0, 8))
+        self.acquisition_mode_var = tk.StringVar(
+            value="Simulation" if self.config_data["inputs"].get("mode") == "simulation" else "Capteurs"
+        )
+        ttk.Combobox(
+            mode_panel,
+            textvariable=self.acquisition_mode_var,
+            values=("Capteurs", "Simulation"),
+            state="readonly",
+            width=16,
+        ).pack(side="left")
+
+        ports_panel = ttk.LabelFrame(parent, text="Ports des équipements", padding=12)
+        ports_panel.pack(fill="x", padx=12, pady=(0, 12))
+        headers = ("Équipement", "Transport", "Port UDP", "Port série (COM)", "Débit série")
+        for column, heading in enumerate(headers):
+            ttk.Label(ports_panel, text=heading).grid(row=0, column=column, sticky="w", padx=5, pady=(0, 6))
+
+        self.input_setting_vars = {}
+        self.input_setting_widgets = {}
+        equipment_labels = (("octans", "Octans"), ("current", "Courant"), ("wind", "Vent"))
+        for row, (equipment, label) in enumerate(equipment_labels, start=1):
+            config = self.config_data["inputs"].get(equipment, {})
+            transport = config.get("transport", "udp")
+            active_port = config.get("port", "")
+            udp_port = config.get("udp_port", active_port if transport == "udp" else "")
+            serial_port = config.get("serial_port", active_port if transport == "serial" else "")
+            values = {
+                "transport": tk.StringVar(value="Série" if transport == "serial" else "UDP"),
+                "udp_port": tk.StringVar(value=str(udp_port)),
+                "serial_port": tk.StringVar(value=str(serial_port)),
+                "baudrate": tk.StringVar(value=str(config.get("baudrate", 115200))),
+            }
+            self.input_setting_vars[equipment] = values
+            ttk.Label(ports_panel, text=label).grid(row=row, column=0, sticky="w", padx=5, pady=5)
+            transport_combo = ttk.Combobox(
+                ports_panel, textvariable=values["transport"], values=("UDP", "Série"),
+                state="readonly", width=12,
+            )
+            transport_combo.grid(row=row, column=1, sticky="ew", padx=5, pady=5)
+            udp_entry = ttk.Entry(ports_panel, textvariable=values["udp_port"], width=12)
+            udp_entry.grid(row=row, column=2, sticky="ew", padx=5, pady=5)
+            serial_entry = ttk.Entry(ports_panel, textvariable=values["serial_port"], width=16)
+            serial_entry.grid(row=row, column=3, sticky="ew", padx=5, pady=5)
+            baudrate_entry = ttk.Entry(ports_panel, textvariable=values["baudrate"], width=12)
+            baudrate_entry.grid(row=row, column=4, sticky="ew", padx=5, pady=5)
+            self.input_setting_widgets[equipment] = {
+                "udp_port": udp_entry,
+                "serial_port": serial_entry,
+                "baudrate": baudrate_entry,
+            }
+            transport_combo.bind(
+                "<<ComboboxSelected>>",
+                lambda event, key=equipment: self._update_port_field_states(key),
+            )
+            self._update_port_field_states(equipment)
+
+        for column in range(len(headers)):
+            ports_panel.columnconfigure(column, weight=1 if column > 0 else 0)
+        ttk.Label(
+            parent,
+            text="Les ports inactifs sont conservés pour faciliter le changement de transport.",
+        ).pack(anchor="w", padx=16)
+        actions = ttk.Frame(parent, padding=12)
+        actions.pack(fill="x")
+        ttk.Button(
+            actions, text="Enregistrer et appliquer", command=self.save_input_settings
+        ).pack(side="left")
+        self.input_settings_status_var = tk.StringVar(value="")
+        ttk.Label(actions, textvariable=self.input_settings_status_var).pack(side="left", padx=12)
+
+    def _update_port_field_states(self, equipment):
+        is_udp = self.input_setting_vars[equipment]["transport"].get() == "UDP"
+        widgets = self.input_setting_widgets[equipment]
+        widgets["udp_port"].configure(state="normal" if is_udp else "disabled")
+        widgets["serial_port"].configure(state="disabled" if is_udp else "normal")
+        widgets["baudrate"].configure(state="disabled" if is_udp else "normal")
+
+    def save_input_settings(self):
+        equipment_settings = {}
+        for equipment, values in self.input_setting_vars.items():
+            equipment_settings[equipment] = {
+                "transport": "serial" if values["transport"].get() == "Série" else "udp",
+                "udp_port": values["udp_port"].get(),
+                "serial_port": values["serial_port"].get(),
+                "baudrate": values["baudrate"].get(),
+            }
+
+        try:
+            updated_config = copy.deepcopy(self.config_data)
+            updated_config["inputs"] = build_input_configuration(
+                self.config_data["inputs"],
+                self.acquisition_mode_var.get(),
+                equipment_settings,
+            )
+        except ValueError as exc:
+            messagebox.showerror("Configuration des ports", str(exc))
+            return
+
+        config_path = BASE / "config.json"
+        temporary_path = config_path.with_name("config.json.tmp")
+        try:
+            temporary_path.write_text(
+                json.dumps(updated_config, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+            temporary_path.replace(config_path)
+        except OSError as exc:
+            temporary_path.unlink(missing_ok=True)
+            messagebox.showerror("Configuration des ports", f"Impossible d'enregistrer config.json: {exc}")
+            return
+
+        self.stop_inputs()
+        self.config_data = updated_config
+        with self.data_lock:
+            self.heave.clear()
+        self.start_inputs()
+        self.input_settings_status_var.set("Configuration enregistrée et acquisition relancée.")
+
     def _load_vessel_rao(self, vessel_name):
         profile = self.vessels[vessel_name]
         filepath = profile.get("rao_file")
@@ -902,6 +1084,18 @@ class App(tk.Tk):
         # Démarrage du thread de calcul lourd
         self.processor = WaveProcessor(self.data_lock, self.heave, self.sample_rate, self.result_queue, self.config_data, self.rao)
         self.processor.start()
+
+    def stop_inputs(self):
+        workers = getattr(self, "workers", [])
+        for worker in workers:
+            worker.stop()
+        processor = getattr(self, "processor", None)
+        if processor:
+            processor.stop()
+        for worker in workers:
+            worker.join(timeout=1.0)
+        if processor:
+            processor.join(timeout=2.5)
 
     def tick(self):
         """Boucle principale UI, extrêmement légère."""
@@ -1030,8 +1224,7 @@ class App(tk.Tk):
         self.canvas.draw_idle()
 
     def on_close(self):
-        for w in self.workers: w.stop()
-        if hasattr(self, 'processor'): self.processor.stop()
+        self.stop_inputs()
         self.logger.close()
         self.destroy()
 
