@@ -126,14 +126,23 @@ class RAOManager:
             workbook = load_workbook(path, read_only=True, data_only=True)
             try:
                 for sheet in workbook.worksheets:
+                    sheet_name = sheet.title.strip()
+                    if sheet_name.endswith("°"):
+                        sheet_name = sheet_name[:-1].strip()
                     try:
-                        heading = float(sheet.title)
+                        heading = float(sheet_name)
                     except ValueError:
                         continue
 
                     points = []
-                    for row in sheet.iter_rows(min_row=5, min_col=2, max_col=5, values_only=True):
-                        period, gain = row[0], row[3]
+                    if sheet["A4"].value == "Period" and sheet["F4"].value == "Heave":
+                        rows = sheet.iter_rows(min_row=7, min_col=1, max_col=6, values_only=True)
+                        period_index, gain_index = 0, 5
+                    else:
+                        rows = sheet.iter_rows(min_row=5, min_col=2, max_col=5, values_only=True)
+                        period_index, gain_index = 0, 3
+                    for row in rows:
+                        period, gain = row[period_index], row[gain_index]
                         if period is None or gain is None:
                             continue
                         period, gain = float(period), float(gain)

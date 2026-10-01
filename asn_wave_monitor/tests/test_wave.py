@@ -89,6 +89,26 @@ def test_rao_manager_loads_heading_specific_excel_curves(tmp_path):
     assert rao.get_gain(0.25) == 0.6
 
 
+def test_rao_manager_loads_molene_excel_layout(tmp_path):
+    workbook = Workbook()
+    for heading, gain in (("0°", 0.8), ("90°", 0.6)):
+        sheet = workbook.active if heading == "0°" else workbook.create_sheet(heading)
+        sheet.title = heading
+        sheet.cell(row=4, column=1, value="Period")
+        sheet.cell(row=4, column=6, value="Heave")
+        sheet.cell(row=7, column=1, value=4.0)
+        sheet.cell(row=7, column=6, value=gain)
+    filepath = tmp_path / "rao_molene.xlsx"
+    workbook.save(filepath)
+
+    rao = RAOManager(filepath)
+
+    assert rao.available_headings == (0.0, 90.0)
+    assert rao.get_gain(0.25) == 0.8
+    rao.set_heading(90)
+    assert rao.get_gain(0.25) == 0.6
+
+
 def test_simulate_sea_state_has_realistic_variability():
     samples = [simulate_sea_state(i * 0.2) for i in range(600)]
     arr = np.asarray(samples, dtype=float)

@@ -32,9 +32,9 @@ Le calcul utilise une fréquence d'échantillonnage configurée actuellement à 
 
 ## Profils navire et RAO
 
-Le menu **Navire** choisit le profil RAO. Le menu **Direction de houle** choisit l'incidence relative au navire. Le profil configuré actuellement est **IOT - Ile d'Ouessant**, avec une direction initiale de 0°.
+Le menu **Navire** choisit le profil RAO. Le menu **Direction de houle** choisit l'incidence relative au navire. Les profils disponibles sont **IOT - Ile d'Ouessant** et **ASN - Ile de Molène**; l'IOT reste sélectionné au démarrage. Leur direction initiale est de 0°.
 
-Le classeur Excel IOT comporte des onglets nommés par angle. Le lecteur prend la période en secondes de la colonne B et l'amplitude HEAVE de la colonne E, puis convertit la période en fréquence (`f = 1 / T`). Il interpole les gains en fréquence et sélectionne l'onglet d'angle choisi. Hors de la plage de fréquences couverte, le gain est neutre (1), donc aucune correction RAO n'est appliquée.
+Le classeur Excel IOT comporte des onglets nommés par angle. Le lecteur prend la période en secondes de la colonne B et l'amplitude HEAVE de la colonne E. Le classeur Molène utilise des onglets suffixés par `°`, avec la période en colonne A et l'amplitude HEAVE en colonne F. Dans les deux cas, la période est convertie en fréquence (`f = 1 / T`), puis les gains sont interpolés selon l'angle sélectionné. Hors de la plage de fréquences couverte, le gain est neutre (1), donc aucune correction RAO n'est appliquée.
 
 La correction est appliquée au spectre avant le calcul des deux indicateurs :
 
@@ -44,7 +44,7 @@ Hs = 4 * sqrt(integrale(PSD_corrigee))
 Tp = 1 / frequence_du_pic(PSD_corrigee)
 ```
 
-Le classeur IOT est fourni dans `rao/RAO_IOT_Arrival_Concrete_V0.xlsx` et référencé par un chemin relatif dans `config.json`. Copier le dossier complet de l'application conserve ainsi la RAO avec elle. Pour ajouter un navire, placer son classeur dans `rao/` et ajouter une entrée dans `vessels` avec son chemin relatif et `default_heading_deg`.
+Les classeurs IOT et Molène sont fournis dans `rao/` et référencés par des chemins relatifs dans `config.json`. Copier le dossier complet de l'application conserve ainsi les RAO avec elle. Pour ajouter un navire, placer son classeur dans `rao/` et ajouter une entrée dans `vessels` avec son chemin relatif et `default_heading_deg`.
 
 ## Données et validation
 

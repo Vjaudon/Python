@@ -14,6 +14,10 @@
     "IOT - Ile d'Ouessant": {
       "rao_file": "rao/RAO_IOT_Arrival_Concrete_V0.xlsx",
       "default_heading_deg": 0
+    },
+    "ASN - Ile de Molène": {
+      "rao_file": "rao/RAO_ ASN_Ile de Molene_Cd=0.8.xlsx",
+      "default_heading_deg": 0
     }
   },
   "alerts": {
