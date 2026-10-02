@@ -1,5 +1,9 @@
 $ErrorActionPreference = "Stop"
 $projectRoot = $PSScriptRoot
+$version = (Get-Content (Join-Path $projectRoot "VERSION") -Raw).Trim()
+if ($version -notmatch '^\d+\.\d+\.\d+$') {
+    throw "VERSION doit respecter le format semver X.Y.Z."
+}
 $buildRoot = Join-Path $projectRoot "build"
 $buildId = [guid]::NewGuid().ToString("N")
 $workRoot = Join-Path $buildRoot "work-$buildId"
@@ -64,12 +68,15 @@ try {
 
     New-Item -ItemType Directory -Force -Path $installerOutput | Out-Null
     $installerScript = Join-Path $projectRoot "packaging\installer.iss"
-    & $innoCompiler.Source $installerScript "/DAppSource=$appBundle" "/DOutputDir=$installerOutput"
+    & $innoCompiler.Source $installerScript `
+        "/DAppSource=$appBundle" `
+        "/DOutputDir=$installerOutput" `
+        "/DAppVersion=$version"
     if ($LASTEXITCODE -ne 0) {
         throw "La compilation de l'installateur Inno Setup a échoué."
     }
 
-    $installerPath = Join-Path $installerOutput "ASN-Wave-Monitor-Setup.exe"
+    $installerPath = Join-Path $installerOutput "ASN-Wave-Monitor-Setup-v$version.exe"
     if (-not (Test-Path $installerPath)) {
         throw "L'installateur attendu n'a pas été généré: $installerPath"
     }

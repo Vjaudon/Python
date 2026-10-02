@@ -1,5 +1,8 @@
 #define AppName "ASN Wave Monitor"
-#define AppVersion "1.0.0"
+#ifndef AppVersion
+  #define AppVersion "0.0.0"
+#endif
+#define SetupBaseFilename "ASN-Wave-Monitor-Setup-v" + AppVersion
 
 #ifndef AppSource
   #error AppSource must be supplied by build_installer.ps1
@@ -17,7 +20,7 @@ DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 UninstallDisplayIcon={app}\ASN Wave Monitor.exe
 OutputDir={#OutputDir}
-OutputBaseFilename=ASN-Wave-Monitor-Setup
+OutputBaseFilename={#SetupBaseFilename}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

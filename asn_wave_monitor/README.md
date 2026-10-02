@@ -27,7 +27,7 @@ python app.py
 
 ## Installateur Windows
 
-Pour générer `dist/ASN-Wave-Monitor-Setup.exe`, installez les dépendances du projet, PyInstaller (`py -m pip install --user pyinstaller`) et Inno Setup 6, puis exécutez :
+Pour générer `dist/ASN-Wave-Monitor-Setup-v3.0.0.exe`, installez les dépendances du projet, PyInstaller (`py -m pip install --user pyinstaller`) et Inno Setup 6, puis exécutez :
 
 ```powershell
 .\build_installer.ps1
