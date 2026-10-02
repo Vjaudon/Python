@@ -1,5 +1,6 @@
 import csv
 import copy
+import ipaddress
 import json
 import math
 import queue
@@ -36,22 +37,22 @@ class WaveResult:
     timestamp: float = 0.0
 
 # ==========================================
-# GESTION DES DONNÉES (TXT & RAO)
+# GESTION DES DONNÉES (CSV & RAO)
 # ==========================================
 
-class TextLogger:
-    """Write measurements and errors to a tab-separated text log."""
+class CSVLogger:
+    """Write measurements and errors to a comma-separated log."""
     def __init__(self, directory):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.log_path = self.directory / f"asn_measurements_{stamp}.txt"
+        self.log_path = self.directory / f"asn_measurements_{stamp}.csv"
         self.file = None
         self.writer = None
 
     def start(self):
         self.file = self.log_path.open("w", encoding="utf-8", newline="")
-        self.writer = csv.writer(self.file, delimiter="\t", lineterminator="\n")
+        self.writer = csv.writer(self.file, lineterminator="\n")
         self.writer.writerow((
             "timestamp_utc", "type", "heave_m", "current_speed_kn",
             "current_direction_deg", "current_depth_m", "wind_speed_kn",
@@ -93,6 +94,13 @@ def build_input_configuration(current_inputs, acquisition_mode, equipment_settin
         if transport not in ("udp", "serial"):
             raise ValueError(f"Transport invalide pour {equipment}.")
 
+        source_host = settings.get("udp_host", "").strip()
+        if transport == "udp" and source_host:
+            try:
+                source_host = str(ipaddress.IPv4Address(source_host))
+            except ipaddress.AddressValueError as exc:
+                raise ValueError(f"L'adresse IP source de {equipment} doit être une adresse IPv4 valide.") from exc
+
         udp_port_text = settings["udp_port"].strip()
         if udp_port_text:
             try:
@@ -125,6 +133,7 @@ def build_input_configuration(current_inputs, acquisition_mode, equipment_settin
             raise ValueError(f"Le débit série de {equipment} doit être supérieur à zéro.")
 
         config["transport"] = transport
+        config["host"] = source_host
         config["udp_port"] = udp_port if udp_port is not None else ""
         config["serial_port"] = serial_port
         config["baudrate"] = baudrate
@@ -270,27 +279,33 @@ class ExailParser:
     """Decodeur minimal du format binaire STDBIN Exail."""
     @staticmethod
     def phlin(payload):
-        """Decode une trame $PHLIN et retourne le heave en metres."""
+        """Decode a PHLIN sentence from a single or multi-sentence payload."""
         try:
-            sentence = payload.decode("ascii").strip()
-            if not sentence.startswith("$") or "*" not in sentence:
-                return None
-
-            body, checksum = sentence[1:].rsplit("*", 1)
-            if len(checksum) != 2:
-                return None
-            expected = 0
-            for character in body.encode("ascii"):
-                expected ^= character
-            if int(checksum, 16) != expected:
-                return None
-
-            fields = body.split(",")
-            if len(fields) != 4 or fields[0].upper() != "PHLIN":
-                return None
-            return ("heave", float(fields[3]))
-        except (UnicodeDecodeError, ValueError):
+            sentences = payload.decode("ascii").splitlines()
+        except UnicodeDecodeError:
             return None
+
+        for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence.upper().startswith("$PHLIN,") or "*" not in sentence:
+                continue
+            try:
+                body, checksum = sentence[1:].rsplit("*", 1)
+                if len(checksum) != 2:
+                    continue
+                expected = 0
+                for character in body.encode("ascii"):
+                    expected ^= character
+                if int(checksum, 16) != expected:
+                    continue
+
+                fields = body.split(",")
+                if len(fields) != 4 or fields[0].upper() != "PHLIN":
+                    continue
+                return ("heave", float(fields[3]))
+            except ValueError:
+                continue
+        return None
 
     @staticmethod
     def stdbin(payload):
@@ -457,10 +472,17 @@ class SerialReceiver(threading.Thread):
 # TRAITEMENT DU SIGNAL EN ARRIÈRE-PLAN
 # ==========================================
 
-def compute_wave(heaves, sample_rate_hz, rao_manager=None, fmin=0.03, fmax=0.5):
+def compute_wave(
+    heaves,
+    sample_rate_hz,
+    rao_manager=None,
+    fmin=0.03,
+    fmax=0.5,
+    min_duration_seconds=60,
+):
     """Fonction mathématique pure, isolée des threads."""
     x = np.asarray(heaves, dtype=float)
-    if len(x) < max(32, int(sample_rate_hz * 60)):
+    if len(x) < max(32, int(sample_rate_hz * min_duration_seconds)):
         return WaveResult()
 
     x = signal.detrend(x)
@@ -508,12 +530,18 @@ class WaveProcessor(threading.Thread):
                 heave_copy = list(self.heave_deque)
             
             if heave_copy:
+                rao_manager = (
+                    None if self.config["inputs"].get("mode") == "simulation" else self.rao_manager
+                )
                 result = compute_wave(
                     heave_copy, 
                     self.sample_rate, 
-                    self.rao_manager,
+                    rao_manager,
                     fmin=self.config["wave"]["min_frequency_hz"],
-                    fmax=self.config["wave"]["max_frequency_hz"]
+                    fmax=self.config["wave"]["max_frequency_hz"],
+                    min_duration_seconds=(
+                        10 if self.config["inputs"].get("mode") == "simulation" else 60
+                    ),
                 )
                 self.result_queue.put(result)
             
@@ -621,6 +649,8 @@ class App(tk.Tk):
         self.history_t = deque(maxlen=1800)
         self.history_hs = deque(maxlen=1800)
         self.history_tp = deque(maxlen=1800)
+        self.history_current = deque(maxlen=1800)
+        self.history_wind = deque(maxlen=1800)
         
         self.current = {"speed": float("nan"), "direction": float("nan"), "depth": float("nan")}
         self.wind = {"speed": float("nan"), "direction": float("nan")}
@@ -635,7 +665,7 @@ class App(tk.Tk):
         self.rao = self._load_vessel_rao(self.selected_vessel)
 
         self.data_directory = BASE / self.config_data["storage"]["directory"]
-        self.logger = TextLogger(self.data_directory)
+        self.logger = CSVLogger(self.data_directory)
         self.logger.start()
 
         self.build_ui()
@@ -655,9 +685,11 @@ class App(tk.Tk):
         self.notebook.pack(fill="both", expand=True)
         dashboard = ttk.Frame(self.notebook)
         data_tab = ttk.Frame(self.notebook)
+        graphs_tab = ttk.Frame(self.notebook)
         ports_tab = ttk.Frame(self.notebook)
         self.notebook.add(dashboard, text="Tableau de bord")
         self.notebook.add(data_tab, text="Données")
+        self.notebook.add(graphs_tab, text="Graphiques")
         self.notebook.add(ports_tab, text="Ports")
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
@@ -735,14 +767,22 @@ class App(tk.Tk):
         yscroll.pack(side="right", fill="y")
         self.error_log_box.configure(yscrollcommand=yscroll.set)
 
-        self.fig = Figure(figsize=(11, 5), dpi=100)
-        self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=dashboard)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
-
+        self._build_graphs_tab(graphs_tab)
         self._build_data_tab(data_tab)
         self.refresh_data_files()
         self._build_input_settings_tab(ports_tab)
+
+    def _build_graphs_tab(self, parent):
+        graph_frame = ttk.Frame(parent, padding=12)
+        graph_frame.pack(fill="both", expand=True)
+        self.fig = Figure(figsize=(13, 8), dpi=100)
+        self.wave_ax = self.fig.add_subplot(211)
+        self.tp_ax = self.wave_ax.twinx()
+        self.environment_ax = self.fig.add_subplot(212, sharex=self.wave_ax)
+        self.wind_ax = self.environment_ax.twinx()
+        self.fig.subplots_adjust(left=0.08, right=0.9, top=0.95, bottom=0.1, hspace=0.45)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=graph_frame)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def _build_data_tab(self, parent):
         toolbar = ttk.Frame(parent, padding=10)
@@ -812,7 +852,8 @@ class App(tk.Tk):
             self.data_file_tree.delete(item)
 
         paths = sorted(
-            self.data_directory.glob("asn_measurements_*.txt"),
+            list(self.data_directory.glob("asn_measurements_*.csv"))
+            + list(self.data_directory.glob("asn_measurements_*.txt")),
             key=lambda path: path.stat().st_mtime,
             reverse=True,
         )
@@ -825,7 +866,7 @@ class App(tk.Tk):
 
         if not paths:
             self._clear_data_preview()
-            self.data_status_var.set("Aucun fichier texte trouvé dans le dossier data.")
+            self.data_status_var.set("Aucun journal trouvé dans le dossier data.")
             return
 
         item = selected_path if selected_path in self.data_file_tree.get_children() else str(paths[0].resolve())
@@ -844,7 +885,8 @@ class App(tk.Tk):
         row_count = 0
         try:
             with filepath.open("r", encoding="utf-8", newline="") as source:
-                reader = csv.DictReader(source, delimiter="\t")
+                delimiter = "\t" if filepath.suffix.lower() == ".txt" else ","
+                reader = csv.DictReader(source, delimiter=delimiter)
                 for row in reader:
                     recent_rows.append(row)
                     row_count += 1
@@ -890,7 +932,10 @@ class App(tk.Tk):
 
         ports_panel = ttk.LabelFrame(parent, text="Ports des équipements", padding=12)
         ports_panel.pack(fill="x", padx=12, pady=(0, 12))
-        headers = ("Équipement", "Transport", "Port UDP", "Port série (COM)", "Débit série")
+        headers = (
+            "Équipement", "Transport", "IP source UDP", "Port UDP",
+            "Port série (COM)", "Débit série",
+        )
         for column, heading in enumerate(headers):
             ttk.Label(ports_panel, text=heading).grid(row=0, column=column, sticky="w", padx=5, pady=(0, 6))
 
@@ -905,6 +950,7 @@ class App(tk.Tk):
             serial_port = config.get("serial_port", active_port if transport == "serial" else "")
             values = {
                 "transport": tk.StringVar(value="Série" if transport == "serial" else "UDP"),
+                "udp_host": tk.StringVar(value=str(config.get("host", ""))),
                 "udp_port": tk.StringVar(value=str(udp_port)),
                 "serial_port": tk.StringVar(value=str(serial_port)),
                 "baudrate": tk.StringVar(value=str(config.get("baudrate", 115200))),
@@ -916,13 +962,16 @@ class App(tk.Tk):
                 state="readonly", width=12,
             )
             transport_combo.grid(row=row, column=1, sticky="ew", padx=5, pady=5)
+            host_entry = ttk.Entry(ports_panel, textvariable=values["udp_host"], width=18)
+            host_entry.grid(row=row, column=2, sticky="ew", padx=5, pady=5)
             udp_entry = ttk.Entry(ports_panel, textvariable=values["udp_port"], width=12)
-            udp_entry.grid(row=row, column=2, sticky="ew", padx=5, pady=5)
+            udp_entry.grid(row=row, column=3, sticky="ew", padx=5, pady=5)
             serial_entry = ttk.Entry(ports_panel, textvariable=values["serial_port"], width=16)
-            serial_entry.grid(row=row, column=3, sticky="ew", padx=5, pady=5)
+            serial_entry.grid(row=row, column=4, sticky="ew", padx=5, pady=5)
             baudrate_entry = ttk.Entry(ports_panel, textvariable=values["baudrate"], width=12)
-            baudrate_entry.grid(row=row, column=4, sticky="ew", padx=5, pady=5)
+            baudrate_entry.grid(row=row, column=5, sticky="ew", padx=5, pady=5)
             self.input_setting_widgets[equipment] = {
+                "udp_host": host_entry,
                 "udp_port": udp_entry,
                 "serial_port": serial_entry,
                 "baudrate": baudrate_entry,
@@ -937,7 +986,7 @@ class App(tk.Tk):
             ports_panel.columnconfigure(column, weight=1 if column > 0 else 0)
         ttk.Label(
             parent,
-            text="Les ports inactifs sont conservés pour faciliter le changement de transport.",
+            text="L'IP source UDP est facultative (vide = toute adresse). Les champs du transport inactif sont conservés.",
         ).pack(anchor="w", padx=16)
         actions = ttk.Frame(parent, padding=12)
         actions.pack(fill="x")
@@ -950,6 +999,7 @@ class App(tk.Tk):
     def _update_port_field_states(self, equipment):
         is_udp = self.input_setting_vars[equipment]["transport"].get() == "UDP"
         widgets = self.input_setting_widgets[equipment]
+        widgets["udp_host"].configure(state="normal" if is_udp else "disabled")
         widgets["udp_port"].configure(state="normal" if is_udp else "disabled")
         widgets["serial_port"].configure(state="disabled" if is_udp else "normal")
         widgets["baudrate"].configure(state="disabled" if is_udp else "normal")
@@ -959,6 +1009,7 @@ class App(tk.Tk):
         for equipment, values in self.input_setting_vars.items():
             equipment_settings[equipment] = {
                 "transport": "serial" if values["transport"].get() == "Série" else "udp",
+                "udp_host": values["udp_host"].get(),
                 "udp_port": values["udp_port"].get(),
                 "serial_port": values["serial_port"].get(),
                 "baudrate": values["baudrate"].get(),
@@ -994,6 +1045,7 @@ class App(tk.Tk):
             self.heave.clear()
         self.start_inputs()
         self.input_settings_status_var.set("Configuration enregistrée et acquisition relancée.")
+        self._update_rao_status()
 
     def _load_vessel_rao(self, vessel_name):
         profile = self.vessels[vessel_name]
@@ -1021,7 +1073,9 @@ class App(tk.Tk):
             self._update_rao_status()
 
     def _update_rao_status(self):
-        if self.rao.load_error:
+        if self.config_data["inputs"].get("mode") == "simulation":
+            self.rao_status_var.set("RAO non appliquée en simulation")
+        elif self.rao.load_error:
             self.rao_status_var.set(f"RAO indisponible: {self.rao.load_error}")
         elif self.rao.available_headings:
             self.rao_status_var.set(
@@ -1136,6 +1190,12 @@ class App(tk.Tk):
                 self.history_t.append(datetime.now().strftime("%H:%M:%S"))
                 self.history_hs.append(self.wave.hs_m if self.wave.valid else np.nan)
                 self.history_tp.append(self.wave.tp_s if self.wave.valid else np.nan)
+                self.history_current.append(
+                    self.current["speed"] if np.isfinite(self.current["speed"]) else np.nan
+                )
+                self.history_wind.append(
+                    self.wind["speed"] if np.isfinite(self.wind["speed"]) else np.nan
+                )
                 self.update_dashboard(error_count=error_count, missing_sensors=missing_sensors)
                 self._log_current_state()
         except queue.Empty:
@@ -1194,6 +1254,12 @@ class App(tk.Tk):
     def update_dashboard(self, error_count=0, missing_sensors=0):
         self.vars["Hs"][0].set(f"{self.wave.hs_m:.2f}" if self.wave.valid else "—")
         self.vars["Tp"][0].set(f"{self.wave.tp_s:.1f}" if self.wave.valid else "—")
+        self.vars["Courant"][0].set(
+            f"{self.current['speed']:.2f}" if np.isfinite(self.current["speed"]) else "—"
+        )
+        self.vars["Vent"][0].set(
+            f"{self.wind['speed']:.1f}" if np.isfinite(self.wind["speed"]) else "—"
+        )
 
         quality = determine_reception_quality(self.wave.valid, missing_sensors=missing_sensors, error_count=error_count)
         self.quality_var.set(f"{quality} ({missing_sensors} missing / {error_count} errors)")
@@ -1210,17 +1276,34 @@ class App(tk.Tk):
 
         self.alert_var.set("ALERTE: " + ", ".join(alarms) if alarms else "NORMAL")
 
-        self.ax.clear()
+        self.wave_ax.clear()
+        self.tp_ax.clear()
+        self.environment_ax.clear()
+        self.wind_ax.clear()
         x = list(self.history_t)
-        self.ax.plot(x, self.history_hs, label="Hs (m)")
-        self.ax.plot(x, self.history_tp, label="Tp (s)")
-        self.ax.grid(True, alpha=0.25)
-        self.ax.legend(loc="upper left")
+        hs_line, = self.wave_ax.plot(x, self.history_hs, color="#2878b5", label="Hs (m)")
+        tp_line, = self.tp_ax.plot(x, self.history_tp, color="#d95f02", label="Tp (s)")
+        self.wave_ax.set_ylabel("Hs (m)", color="#2878b5")
+        self.tp_ax.set_ylabel("Tp (s)", color="#d95f02")
+        self.wave_ax.set_title("État de mer")
+        self.wave_ax.grid(True, alpha=0.25)
+        self.wave_ax.legend((hs_line, tp_line), ("Hs (m)", "Tp (s)"), loc="upper left")
+
+        current_line, = self.environment_ax.plot(
+            x, self.history_current, color="#238b45", label="Courant (kn)"
+        )
+        wind_line, = self.wind_ax.plot(x, self.history_wind, color="#b23a48", label="Vent (kn)")
+        self.environment_ax.set_ylabel("Courant (kn)", color="#238b45")
+        self.wind_ax.set_ylabel("Vent (kn)", color="#b23a48")
+        self.environment_ax.set_title("Vent et courant")
+        self.environment_ax.grid(True, alpha=0.25)
+        self.environment_ax.legend(
+            (current_line, wind_line), ("Courant (kn)", "Vent (kn)"), loc="upper left"
+        )
         if len(x) > 1:
             step = max(1, len(x) // 8)
-            self.ax.set_xticks(range(0, len(x), step))
-            self.ax.set_xticklabels(x[::step], rotation=30)
-        self.fig.tight_layout()
+            self.environment_ax.set_xticks(range(0, len(x), step))
+            self.environment_ax.set_xticklabels(x[::step], rotation=30)
         self.canvas.draw_idle()
 
     def on_close(self):

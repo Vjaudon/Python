@@ -27,10 +27,10 @@
   },
   "storage": {
     "directory": "data",
-    "format": "txt"
+    "format": "csv"
   },
   "inputs": {
-    "mode": "udp",
+    "mode": "simulation",
     "preset": "instrument",
     "octans": {
       "transport": "udp",

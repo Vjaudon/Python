@@ -1,7 +1,9 @@
 $ErrorActionPreference = "Stop"
 $projectRoot = $PSScriptRoot
 $buildRoot = Join-Path $projectRoot "build"
-$distRoot = Join-Path $buildRoot "dist"
+$buildId = [guid]::NewGuid().ToString("N")
+$workRoot = Join-Path $buildRoot "work-$buildId"
+$distRoot = Join-Path $buildRoot "dist-$buildId"
 $appBundle = Join-Path $distRoot "ASN Wave Monitor"
 $installerOutput = Join-Path $projectRoot "dist"
 $innoCompiler = Get-Command ISCC.exe -ErrorAction SilentlyContinue
@@ -41,7 +43,7 @@ try {
         --onedir `
         --name "ASN Wave Monitor" `
         --distpath $distRoot `
-        --workpath (Join-Path $buildRoot "work") `
+        --workpath $workRoot `
         --specpath $buildRoot `
         --add-data "${projectRoot}\config.json;." `
         --add-data "${projectRoot}\rao;rao" `

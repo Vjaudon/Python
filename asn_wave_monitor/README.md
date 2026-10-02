@@ -1,16 +1,17 @@
 # ASN Wave Monitor
 
-Application de suivi des vagues à partir du heave mesuré. Elle estime la hauteur significative `Hs` et la période de pic `Tp`, affiche les mesures de vent et de courant, signale l'état des capteurs et enregistre les données dans un fichier texte tabulé.
+Application de suivi des vagues à partir du heave mesuré. Elle estime la hauteur significative `Hs` et la période de pic `Tp`, affiche les mesures de vent et de courant, signale l'état des capteurs et enregistre les données au format CSV.
 
 ## Fonctionnalités
 
-- Acquisition par UDP ou port série, ou génération de données en mode simulation.
-- Configuration des ports UDP et série par équipement dans l'onglet **Ports**, avec application immédiate des réglages.
+- Acquisition par UDP ou port série, ou génération de données en mode simulation avec affichage des valeurs et courbes de vagues, vent et courant; la correction RAO du navire n'est pas appliquée aux vagues simulées.
+- Configuration des ports UDP et série par équipement dans l'onglet **Ports**. L'IP source UDP est facultative; lorsqu'elle est renseignée, seuls les datagrammes provenant de cette IPv4 sont acceptés.
 - Décodage du heave Octans au format `$PHLIN,x.xxx,y.yyy,z.zzz*hh`, avec vérification du checksum XOR et gestion des trames série fragmentées.
 - Calcul spectral sur une fenêtre glissante de 20 minutes, avec detrend et méthode de Welch.
 - Correction du spectre par la RAO du navire et de la direction sélectionnés.
 - Affichage de `Hs`, `Tp`, du vent, du courant, des alertes, de l'état de réception et de l'historique.
-- Enregistrement horodaté des mesures et des erreurs dans des fichiers texte tabulés sous `data/`.
+- Graphiques d'évolution de `Hs`/`Tp` et du vent/courant dans l'onglet **Graphiques**.
+- Enregistrement horodaté des mesures et des erreurs dans des fichiers CSV sous `data/`.
 - Consultation des fichiers enregistrés dans l'onglet **Données**, avec aperçu et ouverture de l'historique complet.
 
 ## Installation et lancement
@@ -60,6 +61,6 @@ Les classeurs IOT et Molène sont fournis dans `rao/` et référencés par des c
 
 ## Données et validation
 
-Chaque lancement crée un fichier `.txt` horodaté dans `data/`. Les lignes tabulées sont identifiées comme `measurement` ou `error`; les en-têtes décrivent les colonnes et les erreurs partagent le journal des mesures. Ces journaux facilitent l'analyse, mais ne constituent pas à eux seuls une validation métrologique.
+Chaque lancement crée un fichier `.csv` horodaté dans `data/`. Les lignes sont identifiées comme `measurement` ou `error`; les en-têtes décrivent les colonnes et les erreurs partagent le journal des mesures. Les anciens fichiers `.txt` restent consultables dans l'onglet **Données**. Ces journaux facilitent l'analyse, mais ne constituent pas à eux seuls une validation métrologique.
 
 Avant tout usage opérationnel, valider les conventions de direction, les paramètres d'acquisition, les courbes RAO, le calcul de `Hs` et de `Tp` avec des données réelles et une référence indépendante. Le classeur IOT fourni correspond à la condition « arrival from test to concrete », à vitesse nulle et en profondeur d'eau infinie ; vérifier que ces hypothèses correspondent à la situation d'utilisation.
